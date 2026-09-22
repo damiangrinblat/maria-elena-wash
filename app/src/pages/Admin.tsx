@@ -1,0 +1,357 @@
+import { useEffect, useState } from 'react'
+import { adminBookings, adminLogin, adminLogout, adminUpdate, getAdminPinCached, resetToSeed, setBookingPaid, setBookingStatus, uid, useDB } from '../store'
+import type { Booking, BookingStatus, Catalog, PaymentMethod, Settings, Site } from '../types'
+import { DAY_NAMES, PAY_LABEL, STATUS_LABEL, money, prettyDate, toISO, waLink, fillTemplate } from '../lib'
+
+type Tab = 'today' | 'bookings' | 'services' | 'sites' | 'settings' | 'reports'
+const TABS: [Tab, string][] = [
+  ['today', 'Hoy'], ['bookings', 'Turnos'], ['services', 'Servicios y precios'],
+  ['sites', 'Barrios'], ['settings', 'Ajustes'], ['reports', 'Reportes'],
+]
+
+export default function Admin() {
+  const db = useDB()
+  const [pin, setPin] = useState('')
+  const [checking, setChecking] = useState(true)
+  const [tab, setTab] = useState<Tab>('today')
+
+  useEffect(() => {
+    const cached = getAdminPinCached()
+    if (!cached) return setChecking(false)
+    adminLogin(cached).then((ok) => { if (ok) setPin(cached); setChecking(false) })
+  }, [])
+
+  if (checking) return <div className="page" />
+
+  if (!pin) {
+    return (
+      <div className="page">
+        <section className="card">
+          <h2>Acceso del equipo</h2>
+          <PinLogin onOk={setPin} />
+          <a href="#/" className="muted small">Volver</a>
+        </section>
+      </div>
+    )
+  }
+
+  return (
+    <div className="page wide">
+      <header className="row">
+        <h1>Panel · {db.settings.businessName}</h1>
+        <span className="row">
+          <a href="#/">Ver app cliente</a>
+          <button onClick={() => { adminLogout(); setPin('') }}>Salir</button>
+        </span>
+      </header>
+      <nav className="tabs scroll">
+        {TABS.map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
+      </nav>
+      {tab === 'today' && <Bookings pin={pin} today />}
+      {tab === 'bookings' && <Bookings pin={pin} />}
+      {tab === 'services' && <Services db={db} pin={pin} />}
+      {tab === 'sites' && <Sites db={db} pin={pin} />}
+      {tab === 'settings' && <SettingsTab db={db} pin={pin} />}
+      {tab === 'reports' && <Reports pin={pin} db={db} />}
+    </div>
+  )
+}
+
+function PinLogin({ onOk }: { onOk: (pin: string) => void }) {
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function go() {
+    setBusy(true)
+    const ok = await adminLogin(pin)
+    setBusy(false)
+    if (ok) onOk(pin)
+    else alert('PIN incorrecto')
+  }
+  return (
+    <>
+      <label>PIN<input type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} /></label>
+      <button className="primary" disabled={busy} onClick={go}>Ingresar</button>
+    </>
+  )
+}
+
+const NEXT: Partial<Record<BookingStatus, [BookingStatus, string]>> = {
+  pending: ['confirmed', 'Confirmar'],
+  confirmed: ['in_progress', 'Iniciar'],
+  in_progress: ['done', 'Finalizar'],
+}
+
+function useAdminBookings(pin: string) {
+  const [all, setAll] = useState<Booking[]>([])
+  const [loading, setLoading] = useState(true)
+  const refresh = () => { setLoading(true); adminBookings(pin).then((b) => { setAll(b); setLoading(false) }) }
+  useEffect(refresh, [pin])
+  return { all, loading, refresh }
+}
+
+function Bookings({ pin, today }: { pin: string; today?: boolean }) {
+  const db = useDB()
+  const { all, loading, refresh } = useAdminBookings(pin)
+  const [date, setDate] = useState(today ? toISO(new Date()) : '')
+  const [siteId, setSiteId] = useState('')
+  const list = all
+    .filter((b) => (!date || b.date === date) && (!siteId || b.siteId === siteId))
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+  const closed = date ? db.closedDates.includes(date) : false
+
+  return (
+    <div className="stack">
+      <section className="card">
+        <div className="grid">
+          <label>Fecha<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+          <label>Barrio
+            <select value={siteId} onChange={(e) => setSiteId(e.target.value)}>
+              <option value="">Todos</option>
+              {db.sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="chips">
+          <button onClick={refresh}>Actualizar</button>
+          {date && (
+            <button onClick={() => adminUpdate(pin, (d) => ({ ...d, closedDates: closed ? d.closedDates.filter((x) => x !== date) : [...d.closedDates, date] }))}>
+              {closed ? 'Reabrir este día' : 'Cerrar este día (lluvia / feriado)'}
+            </button>
+          )}
+        </div>
+      </section>
+      {loading && <p className="muted">Cargando…</p>}
+      {!loading && list.length === 0 && <p className="muted">No hay turnos.</p>}
+      {list.map((b) => {
+        const service = db.services.find((s) => s.id === b.serviceId)
+        const cat = db.categories.find((c) => c.id === b.categoryId)
+        const site = db.sites.find((s) => s.id === b.siteId)
+        const extras = db.extras.filter((e) => b.extraIds.includes(e.id)).map((e) => e.name).join(', ')
+        const next = NEXT[b.status]
+        return (
+          <section className="card" key={b.id}>
+            <div className="row"><strong>{prettyDate(b.date)} {b.time} · {service?.name}</strong><span className={`tag ${b.status}`}>{STATUS_LABEL[b.status]}</span></div>
+            <p>{b.customerName} · {b.plate} {b.vehicle && `· ${b.vehicle}`} · {cat?.name}</p>
+            <p className="muted small">{site?.name}{b.address && ` · ${b.address}`}{extras && ` · Extras: ${extras}`}{b.notes && ` · ${b.notes}`}</p>
+            <p><strong>{money(b.total)}</strong> · {PAY_LABEL[b.payMethod]} · {b.paid ? 'Pagado' : 'Sin pagar'}{b.rating ? ` · ${'★'.repeat(b.rating)}` : ''}</p>
+            <div className="chips">
+              {next && <button className="primary" onClick={async () => { await setBookingStatus(pin, b.id, next[0]); refresh() }}>{next[1]}</button>}
+              <button onClick={async () => { await setBookingPaid(pin, b.id, !b.paid); refresh() }}>{b.paid ? 'Marcar sin pagar' : 'Marcar pagado'}</button>
+              <a className="btn" href={waLink(b.customerPhone, fillTemplate(db.settings.waTemplate, { nombre: b.customerName, fecha: prettyDate(b.date), hora: b.time, barrio: site?.name ?? '', servicio: service?.name ?? '' }))} target="_blank" rel="noreferrer">WhatsApp</a>
+              {b.status !== 'cancelled' && b.status !== 'done' && <button onClick={async () => { await setBookingStatus(pin, b.id, 'cancelled'); refresh() }}>Cancelar</button>}
+            </div>
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
+function Services({ db, pin }: { db: Catalog; pin: string }) {
+  const cats = db.categories
+  const update = (fn: (d: Catalog) => Catalog) => adminUpdate(pin, fn)
+  return (
+    <div className="stack">
+      <section className="card">
+        <h2>Servicios y precios</h2>
+        <div className="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Servicio</th><th>Min.</th>{cats.map((c) => <th key={c.id}>{c.name}</th>)}<th>Activo</th><th /></tr>
+            </thead>
+            <tbody>
+              {db.services.map((s) => (
+                <tr key={s.id}>
+                  <td>
+                    <input value={s.name} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, name: e.target.value } : x) }))} />
+                    <input value={s.description} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, description: e.target.value } : x) }))} />
+                  </td>
+                  <td><input className="num" type="number" value={s.minutes} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, minutes: +e.target.value } : x) }))} /></td>
+                  {cats.map((c) => (
+                    <td key={c.id}><input className="num" type="number" value={db.prices[`${s.id}:${c.id}`] ?? 0}
+                      onChange={(e) => update((d) => ({ ...d, prices: { ...d.prices, [`${s.id}:${c.id}`]: +e.target.value } }))} /></td>
+                  ))}
+                  <td><input type="checkbox" checked={s.active} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, active: e.target.checked } : x) }))} /></td>
+                  <td><button onClick={() => confirm('¿Eliminar servicio?') && update((d) => ({ ...d, services: d.services.filter((x) => x.id !== s.id) }))}>✕</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button onClick={() => update((d) => ({ ...d, services: [...d.services, { id: uid('sv'), name: 'Nuevo servicio', description: '', minutes: 60, active: true }] }))}>+ Servicio</button>
+      </section>
+
+      <section className="card">
+        <h2>Tipos de vehículo</h2>
+        {cats.map((c) => (
+          <div className="row" key={c.id}>
+            <input value={c.name} onChange={(e) => update((d) => ({ ...d, categories: d.categories.map((x) => x.id === c.id ? { ...x, name: e.target.value } : x) }))} />
+            <label className="inline"><input type="checkbox" checked={c.active} onChange={(e) => update((d) => ({ ...d, categories: d.categories.map((x) => x.id === c.id ? { ...x, active: e.target.checked } : x) }))} />Activo</label>
+          </div>
+        ))}
+        <button onClick={() => update((d) => ({ ...d, categories: [...d.categories, { id: uid('ct'), name: 'Nuevo tipo', active: true }] }))}>+ Tipo de vehículo</button>
+      </section>
+
+      <section className="card">
+        <h2>Extras</h2>
+        {db.extras.map((x) => (
+          <div className="row" key={x.id}>
+            <input value={x.name} onChange={(e) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, name: e.target.value } : y) }))} />
+            <input className="num" type="number" value={x.price} onChange={(e) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, price: +e.target.value } : y) }))} />
+            <label className="inline"><input type="checkbox" checked={x.active} onChange={(e) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, active: e.target.checked } : y) }))} />Activo</label>
+            <button onClick={() => update((d) => ({ ...d, extras: d.extras.filter((y) => y.id !== x.id) }))}>✕</button>
+          </div>
+        ))}
+        <button onClick={() => update((d) => ({ ...d, extras: [...d.extras, { id: uid('ex'), name: 'Nuevo extra', price: 0, active: true }] }))}>+ Extra</button>
+      </section>
+    </div>
+  )
+}
+
+function Sites({ db, pin }: { db: Catalog; pin: string }) {
+  const set = (id: string, patch: Partial<Site>) => adminUpdate(pin, (d) => ({ ...d, sites: d.sites.map((s) => (s.id === id ? { ...s, ...patch } : s)) }))
+  return (
+    <div className="stack">
+      {db.sites.map((s) => (
+        <section className="card" key={s.id}>
+          <div className="row">
+            <input value={s.name} onChange={(e) => set(s.id, { name: e.target.value })} />
+            <label className="inline"><input type="checkbox" checked={s.active} onChange={(e) => set(s.id, { active: e.target.checked })} />Activo</label>
+            <button onClick={() => confirm('¿Eliminar barrio?') && adminUpdate(pin, (d) => ({ ...d, sites: d.sites.filter((x) => x.id !== s.id) }))}>✕</button>
+          </div>
+          <div className="grid">
+            <label>Zona<input value={s.zone} onChange={(e) => set(s.id, { zone: e.target.value })} /></label>
+            <label>Modalidad
+              <select value={s.mode} onChange={(e) => set(s.id, { mode: e.target.value as Site['mode'] })}>
+                <option value="fixed">Lugar fijo provisto por el barrio</option>
+                <option value="home">En el domicilio del cliente</option>
+              </select>
+            </label>
+            <label>Desde<input type="time" value={s.start} onChange={(e) => set(s.id, { start: e.target.value })} /></label>
+            <label>Hasta<input type="time" value={s.end} onChange={(e) => set(s.id, { end: e.target.value })} /></label>
+            <label>Minutos por turno<input type="number" value={s.slotMinutes} onChange={(e) => set(s.id, { slotMinutes: +e.target.value })} /></label>
+            <label>Autos simultáneos por turno<input type="number" value={s.perSlot} onChange={(e) => set(s.id, { perSlot: +e.target.value })} /></label>
+          </div>
+          <div className="grid">
+            <label>Comisión para el barrio
+              <select value={s.commissionType} onChange={(e) => set(s.id, { commissionType: e.target.value as Site['commissionType'] })}>
+                <option value="none">Sin comisión</option>
+                <option value="percent">Porcentaje de lo facturado</option>
+                <option value="fixed">Monto fijo por lavado</option>
+              </select>
+            </label>
+            {s.commissionType !== 'none' && (
+              <label>{s.commissionType === 'percent' ? 'Porcentaje (%)' : 'Monto por lavado ($)'}
+                <input type="number" value={s.commissionValue} onChange={(e) => set(s.id, { commissionValue: +e.target.value })} />
+              </label>
+            )}
+            <label>PIN de acceso del barrio (solo lectura)<input value={s.sitePin} onChange={(e) => set(s.id, { sitePin: e.target.value })} placeholder="Vacío = sin acceso" /></label>
+          </div>
+          <label>Aviso para los clientes de este barrio (se muestra al reservar)<input value={s.clientNotice} onChange={(e) => set(s.id, { clientNotice: e.target.value })} /></label>
+          <label>Aviso para la administración del barrio (se muestra en su panel)<input value={s.siteNotice} onChange={(e) => set(s.id, { siteNotice: e.target.value })} /></label>
+          <label>Indicaciones del lugar<input value={s.spotNote} onChange={(e) => set(s.id, { spotNote: e.target.value })} /></label>
+          <div className="chips">
+            {DAY_NAMES.map((n, i) => (
+              <button key={i} className={`chip ${s.days.includes(i) ? 'on' : ''}`}
+                onClick={() => set(s.id, { days: s.days.includes(i) ? s.days.filter((x) => x !== i) : [...s.days, i] })}>{n.slice(0, 3)}</button>
+            ))}
+          </div>
+        </section>
+      ))}
+      <button onClick={() => adminUpdate(pin, (d) => ({ ...d, sites: [...d.sites, { id: uid('site'), name: 'Nuevo barrio', zone: '', mode: 'fixed', spotNote: '', days: [], start: '09:00', end: '17:00', slotMinutes: 60, perSlot: 2, active: true, commissionType: 'none', commissionValue: 0, sitePin: '', clientNotice: '', siteNotice: '' }] }))}>+ Barrio o club</button>
+    </div>
+  )
+}
+
+function SettingsTab({ db, pin }: { db: Catalog; pin: string }) {
+  const s = db.settings
+  const set = (patch: Partial<Settings>) => adminUpdate(pin, (d) => ({ ...d, settings: { ...d.settings, ...patch } }))
+  const text = (k: keyof Settings, label: string, type = 'text') => (
+    <label>{label}<input type={type} value={String(s[k])} onChange={(e) => set({ [k]: type === 'number' ? +e.target.value : e.target.value } as Partial<Settings>)} /></label>
+  )
+  return (
+    <div className="stack">
+      <section className="card">
+        <h2>Marca</h2>
+        <div className="grid">
+          {text('businessName', 'Nombre del negocio')}
+          {text('tagline', 'Frase')}
+          {text('primaryColor', 'Color principal', 'color')}
+          {text('whatsapp', 'WhatsApp (con código de país, ej. 5491112345678)')}
+        </div>
+        {text('promoText', 'Mensaje promocional')}
+        <label>Mensaje de WhatsApp al cliente. Variables: {'{nombre} {fecha} {hora} {barrio} {servicio}'}<textarea rows={2} value={s.waTemplate} onChange={(e) => set({ waTemplate: e.target.value })} /></label>
+        <label>Términos y condiciones<textarea rows={3} value={s.terms} onChange={(e) => set({ terms: e.target.value })} /></label>
+      </section>
+      <section className="card">
+        <h2>Reservas</h2>
+        <div className="grid">
+          {text('cancelHours', 'Horas de anticipación para cancelar sin cargo', 'number')}
+          {text('minAdvanceHours', 'Anticipación mínima para reservar (horas)', 'number')}
+          {text('bookingHorizonDays', 'Cuántos días hacia adelante se puede reservar', 'number')}
+        </div>
+      </section>
+      <section className="card">
+        <h2>Pagos</h2>
+        <div className="chips">
+          {(Object.keys(PAY_LABEL) as PaymentMethod[]).map((m) => (
+            <button key={m} className={`chip ${s.payMethods[m] ? 'on' : ''}`} onClick={() => set({ payMethods: { ...s.payMethods, [m]: !s.payMethods[m] } })}>{PAY_LABEL[m]}</button>
+          ))}
+        </div>
+        {text('mpLink', 'Link de pago de Mercado Pago')}
+        <div className="grid">
+          {text('transferAlias', 'Alias')}
+          {text('transferCbu', 'CBU / CVU')}
+          {text('transferHolder', 'Titular')}
+        </div>
+        {text('cashNote', 'Mensaje para pago en efectivo')}
+      </section>
+      <section className="card">
+        <h2>Seguridad y datos</h2>
+        {text('adminPin', 'PIN del panel')}
+        <button onClick={() => confirm('Esto borra todos los datos y vuelve a los valores iniciales. ¿Seguro?') && resetToSeed(pin)}>Restablecer datos de ejemplo</button>
+      </section>
+    </div>
+  )
+}
+
+function Reports({ pin, db }: { pin: string; db: Catalog }) {
+  const { all, loading, refresh } = useAdminBookings(pin)
+  const [from, setFrom] = useState(() => toISO(new Date(new Date().getFullYear(), new Date().getMonth(), 1)))
+  const [to, setTo] = useState(() => toISO(new Date()))
+  const inRange = all.filter((b) => b.date >= from && b.date <= to && b.status !== 'cancelled')
+  const done = inRange.filter((b) => b.status === 'done')
+  const sum = (l: typeof inRange) => l.reduce((a, b) => a + b.total, 0)
+  const group = (key: (b: (typeof inRange)[number]) => string, name: (k: string) => string) => {
+    const m = new Map<string, { n: number; t: number }>()
+    inRange.forEach((b) => { const k = key(b); const v = m.get(k) ?? { n: 0, t: 0 }; m.set(k, { n: v.n + 1, t: v.t + b.total }) })
+    return [...m].map(([k, v]) => ({ name: name(k), ...v }))
+  }
+  const bySite = group((b) => b.siteId, (k) => db.sites.find((s) => s.id === k)?.name ?? k)
+  const bySvc = group((b) => b.serviceId, (k) => db.services.find((s) => s.id === k)?.name ?? k)
+  const customers = new Set(inRange.map((b) => b.customerPhone.replace(/\D/g, ''))).size
+  const rated = done.filter((b) => b.rating)
+  const avg = rated.length ? (rated.reduce((a, b) => a + (b.rating ?? 0), 0) / rated.length).toFixed(1) : '–'
+
+  return (
+    <div className="stack">
+      <section className="card">
+        <div className="grid">
+          <label>Desde<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+          <label>Hasta<input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+        </div>
+        <button onClick={refresh}>Actualizar</button>
+      </section>
+      {loading && <p className="muted">Cargando…</p>}
+      <section className="kpis">
+        <div className="kpi"><span>Turnos</span><strong>{inRange.length}</strong></div>
+        <div className="kpi"><span>Facturación prevista</span><strong>{money(sum(inRange))}</strong></div>
+        <div className="kpi"><span>Cobrado</span><strong>{money(sum(inRange.filter((b) => b.paid)))}</strong></div>
+        <div className="kpi"><span>Clientes distintos</span><strong>{customers}</strong></div>
+        <div className="kpi"><span>Calificación</span><strong>{avg}</strong></div>
+      </section>
+      <section className="card"><h2>Por barrio</h2>{bySite.map((r) => <div className="row" key={r.name}><span>{r.name}</span><span>{r.n} · {money(r.t)}</span></div>)}</section>
+      <section className="card"><h2>Por servicio</h2>{bySvc.map((r) => <div className="row" key={r.name}><span>{r.name}</span><span>{r.n} · {money(r.t)}</span></div>)}</section>
+    </div>
+  )
+}
