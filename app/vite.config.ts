@@ -16,9 +16,10 @@ export default defineConfig({
         theme_color: '#0e7490',
         background_color: '#f4f6f8',
         display: 'standalone',
-        // Relativos: la app no vive en la raíz del dominio, sino en /maria-elena-wash/.
-        start_url: './',
-        scope: './',
+        // Absolutos: la app no vive en la raíz del dominio, sino en /maria-elena-wash/.
+        // (con rutas relativas, algunos navegadores no resuelven bien el arranque al instalar como app)
+        start_url: '/maria-elena-wash/',
+        scope: '/maria-elena-wash/',
         icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }],
       },
     }),
