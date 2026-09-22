@@ -328,10 +328,50 @@ function SettingsTab({ db }: { db: Catalog }) {
       </section>
       <section className="card">
         <h2>Seguridad y datos</h2>
-        {text('adminPin', 'PIN del panel')}
-        <p className="muted small">Al guardar un PIN nuevo, esta sesión pasa a usarlo automáticamente para los próximos cambios.</p>
+        <PinChanger current={s.adminPin} onSave={(v) => set({ adminPin: v })} />
         <button onClick={() => confirm('Esto borra todos los datos y vuelve a los valores iniciales. ¿Seguro?') && resetToSeed()}>Restablecer datos de ejemplo</button>
       </section>
+    </div>
+  )
+}
+
+/**
+ * Cambio de PIN con confirmación explícita: muestra lo que se escribió (con opción de
+ * revelarlo) y solo guarda cuando se toca "Guardar nuevo PIN", nunca solo.
+ */
+function PinChanger({ current, onSave }: { current: string; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState<'no' | 'yes' | 'done'>('no')
+  const [v, setV] = useState('')
+  const [show, setShow] = useState(false)
+
+  if (editing === 'no') {
+    return (
+      <div className="row">
+        <span>PIN del panel: <strong>{current || '(sin PIN)'}</strong></span>
+        <button onClick={() => { setEditing('yes'); setV('') }}>Cambiar PIN</button>
+      </div>
+    )
+  }
+  if (editing === 'done') {
+    return (
+      <div className="row">
+        <span>PIN actualizado: <strong>{current}</strong></span>
+        <button onClick={() => setEditing('no')}>Listo</button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="stack">
+      <label>Nuevo PIN
+        <input type={show ? 'text' : 'password'} inputMode="numeric" value={v} onChange={(e) => setV(e.target.value)} autoFocus />
+      </label>
+      <label className="inline"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} />Mostrar lo que escribí</label>
+      {v && <p>Vas a guardar este PIN: <strong>{v}</strong> ({v.length} dígitos)</p>}
+      <div className="chips">
+        <button className="primary" disabled={!v} onClick={() => { onSave(v); setEditing('done') }}>Guardar nuevo PIN</button>
+        <button onClick={() => setEditing('no')}>Cancelar</button>
+      </div>
     </div>
   )
 }
