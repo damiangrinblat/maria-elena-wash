@@ -6,7 +6,7 @@ import type { DB } from './types'
  */
 export const seed: DB = {
   settings: {
-    businessName: 'Maria Elena Wash',
+    businessName: 'Brillo Móvil',
     tagline: 'Tu auto limpio mientras disfrutás tu día',
     primaryColor: '#0e7490',
     whatsapp: '',
@@ -21,7 +21,7 @@ export const seed: DB = {
     transferHolder: '',
     cashNote: 'Podés pagar en efectivo en el momento del servicio.',
     promoText: 'Primer lavado con 10% de descuento consultando por WhatsApp.',
-    waTemplate: 'Hola {nombre}, te escribimos de Maria Elena Wash por tu turno de {servicio} el {fecha} a las {hora} en {barrio}.',
+    waTemplate: 'Hola {nombre}, te escribimos de Brillo Móvil por tu turno de {servicio} el {fecha} a las {hora} en {barrio}.',
     terms:
       'Si llueve reprogramamos sin cargo. Cancelaciones sin costo hasta el plazo indicado; pasado ese plazo puede cobrarse el turno.',
   },

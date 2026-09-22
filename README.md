@@ -1,4 +1,6 @@
-# Maria Elena Wash
+# Brillo Móvil
+
+*(nombre de proyecto/repositorio en el código: "Maria Elena Wash" — ver nota en Decisiones tomadas)*
 
 Lavadero de autos móvil.
 

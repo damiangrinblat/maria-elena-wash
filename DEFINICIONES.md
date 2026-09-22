@@ -1,9 +1,9 @@
-# Definiciones – Maria Elena Wash
+# Definiciones – Brillo Móvil
 
 > Borrador de trabajo. Todo es propuesta a validar. Los precios son referenciales: hay que relevar el mercado local antes de fijarlos.
 
 ## 1. Nombre y marca
-El nombre de trabajo es "Maria Elena Wash". Puntos a decidir:
+El nombre definido es "Brillo Móvil" (antes, "Maria Elena Wash"). Puntos a decidir:
 - ¿Se mantiene o se busca un nombre más comercial? Ideas: "Wash a Domicilio", "LavaClub", "Country Wash", "Wash&Go".
 - Verificar disponibilidad: nombre en INPI (marca), dominio (.com.ar / .com), usuario en Instagram/WhatsApp, y nombre en Google Maps.
 - Identidad: logo, paleta de colores, tono (premium y confiable vs. cercano), uniforme del equipo, cartelería y conos para el punto de trabajo.

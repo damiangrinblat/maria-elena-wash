@@ -9,8 +9,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'Maria Elena Wash',
-        short_name: 'ME Wash',
+        name: 'Brillo Móvil',
+        short_name: 'Brillo Móvil',
         description: 'Lavado de autos móvil en barrios cerrados y clubes.',
         lang: 'es-AR',
         theme_color: '#0e7490',
