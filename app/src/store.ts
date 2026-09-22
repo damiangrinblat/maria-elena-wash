@@ -81,29 +81,40 @@ export async function loadCatalog() {
   if (!error && data) setCatalog(data as Catalog)
 }
 
-export function getAdminPinCached() {
+/**
+ * PIN del equipo vigente en esta sesión del navegador. Es la única fuente de verdad:
+ * todas las funciones de abajo lo leen de acá, y se actualiza solo si el propio PIN cambia
+ * desde el panel. Antes cada pantalla se guardaba su propia copia del PIN de login y, si el
+ * PIN se editaba, las pantallas seguían mandando el valor viejo y todo dejaba de guardar.
+ */
+function getPin() {
   try {
     return sessionStorage.getItem(PIN_KEY) ?? ''
   } catch {
     return ''
   }
 }
+function setPin(pin: string) {
+  try {
+    sessionStorage.setItem(PIN_KEY, pin)
+  } catch {
+    /* ignorar */
+  }
+}
+/** @deprecated usar internamente; se mantiene por si algo externo lo necesita. */
+export const getAdminPinCached = getPin
 
 /** Intenta entrar al panel del equipo. Si el PIN es correcto, el catálogo pasa a la versión completa (con PIN incluidos). */
 export async function adminLogin(pin: string): Promise<boolean> {
   if (!supabase) {
     const ok = pin === local.settings.adminPin
-    if (ok) setCatalog(local)
+    if (ok) { setCatalog(local); setPin(pin) }
     return ok
   }
   const { data } = await supabase.rpc('get_full_catalog', { p_pin: pin })
   if (data) {
     setCatalog(data as Catalog)
-    try {
-      sessionStorage.setItem(PIN_KEY, pin)
-    } catch {
-      /* ignorar */
-    }
+    setPin(pin)
     return true
   }
   return false
@@ -118,14 +129,29 @@ export function adminLogout() {
   void loadCatalog()
 }
 
-/** Aplica un cambio al catálogo (edición del panel) y lo guarda. Devuelve false si el PIN ya no es válido. */
-export async function adminUpdate(pin: string, fn: (draft: Catalog) => Catalog): Promise<boolean> {
+/**
+ * Cola de guardados: si el panel dispara varios cambios casi juntos (por ejemplo,
+ * tabulando de un campo a otro), cada uno espera a que termine el anterior antes de
+ * tomar su propia "foto" del catálogo y guardar. Si se hicieran en paralelo, el que
+ * responde después podría pisar el cambio del que respondió antes.
+ */
+let updateChain: Promise<boolean> = Promise.resolve(true)
+
+/** Aplica un cambio al catálogo (edición del panel) y lo guarda con el PIN vigente de la sesión. */
+export function adminUpdate(fn: (draft: Catalog) => Catalog): Promise<boolean> {
+  updateChain = updateChain.then(() => adminUpdateNow(fn))
+  return updateChain
+}
+
+async function adminUpdateNow(fn: (draft: Catalog) => Catalog): Promise<boolean> {
+  const pin = getPin()
   const next = fn(structuredClone(catalog))
   if (!supabase) {
-    if (pin !== local.settings.adminPin && pin !== next.settings.adminPin) return false
+    if (pin !== local.settings.adminPin) return false
     local = { ...local, ...next }
     localPersist()
     setCatalog(next)
+    if (next.settings.adminPin !== pin) setPin(next.settings.adminPin)
     return true
   }
   setCatalog(next) // optimista
@@ -134,11 +160,13 @@ export async function adminUpdate(pin: string, fn: (draft: Catalog) => Catalog):
     await loadCatalog()
     return false
   }
+  // Si este cambio incluía un PIN nuevo, la sesión pasa a usarlo de acá en más.
+  if (next.settings.adminPin !== pin) setPin(next.settings.adminPin)
   return true
 }
 
-export async function resetToSeed(pin: string): Promise<boolean> {
-  return adminUpdate(pin, () => structuredClone(seed))
+export async function resetToSeed(): Promise<boolean> {
+  return adminUpdate(() => structuredClone(seed))
 }
 
 // ---------- Cupos disponibles (sin datos personales) -----------------------
@@ -250,7 +278,8 @@ export async function rateBooking(id: string, phone: string, rating: number): Pr
   return Boolean(data)
 }
 
-export async function adminBookings(pin: string): Promise<Booking[]> {
+export async function adminBookings(): Promise<Booking[]> {
+  const pin = getPin()
   if (!supabase) {
     if (pin !== local.settings.adminPin) return []
     return [...local.bookings].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
@@ -259,7 +288,8 @@ export async function adminBookings(pin: string): Promise<Booking[]> {
   return (data ?? []).map(fromRow)
 }
 
-export async function setBookingStatus(pin: string, id: string, status: Booking['status']): Promise<boolean> {
+export async function setBookingStatus(id: string, status: Booking['status']): Promise<boolean> {
+  const pin = getPin()
   if (!supabase) {
     if (pin !== local.settings.adminPin) return false
     local = { ...local, bookings: local.bookings.map((b) => (b.id === id ? { ...b, status } : b)) }
@@ -270,7 +300,8 @@ export async function setBookingStatus(pin: string, id: string, status: Booking[
   return Boolean(data)
 }
 
-export async function setBookingPaid(pin: string, id: string, paid: boolean): Promise<boolean> {
+export async function setBookingPaid(id: string, paid: boolean): Promise<boolean> {
+  const pin = getPin()
   if (!supabase) {
     if (pin !== local.settings.adminPin) return false
     local = { ...local, bookings: local.bookings.map((b) => (b.id === id ? { ...b, paid } : b)) }

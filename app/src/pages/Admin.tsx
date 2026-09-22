@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { adminBookings, adminLogin, adminLogout, adminUpdate, getAdminPinCached, resetToSeed, setBookingPaid, setBookingStatus, uid, useDB } from '../store'
 import type { Booking, BookingStatus, Catalog, PaymentMethod, Settings, Site } from '../types'
 import { DAY_NAMES, PAY_LABEL, STATUS_LABEL, money, prettyDate, toISO, waLink, fillTemplate } from '../lib'
@@ -11,24 +11,24 @@ const TABS: [Tab, string][] = [
 
 export default function Admin() {
   const db = useDB()
-  const [pin, setPin] = useState('')
+  const [in_, setIn] = useState(false)
   const [checking, setChecking] = useState(true)
   const [tab, setTab] = useState<Tab>('today')
 
   useEffect(() => {
     const cached = getAdminPinCached()
     if (!cached) return setChecking(false)
-    adminLogin(cached).then((ok) => { if (ok) setPin(cached); setChecking(false) })
+    adminLogin(cached).then((ok) => { setIn(ok); setChecking(false) })
   }, [])
 
   if (checking) return <div className="page" />
 
-  if (!pin) {
+  if (!in_) {
     return (
       <div className="page">
         <section className="card">
           <h2>Acceso del equipo</h2>
-          <PinLogin onOk={setPin} />
+          <PinLogin onOk={() => setIn(true)} />
           <a href="#/" className="muted small">Volver</a>
         </section>
       </div>
@@ -41,30 +41,30 @@ export default function Admin() {
         <h1>Panel · {db.settings.businessName}</h1>
         <span className="row">
           <a href="#/">Ver app cliente</a>
-          <button onClick={() => { adminLogout(); setPin('') }}>Salir</button>
+          <button onClick={() => { adminLogout(); setIn(false) }}>Salir</button>
         </span>
       </header>
       <nav className="tabs scroll">
         {TABS.map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
       </nav>
-      {tab === 'today' && <Bookings pin={pin} today />}
-      {tab === 'bookings' && <Bookings pin={pin} />}
-      {tab === 'services' && <Services db={db} pin={pin} />}
-      {tab === 'sites' && <Sites db={db} pin={pin} />}
-      {tab === 'settings' && <SettingsTab db={db} pin={pin} />}
-      {tab === 'reports' && <Reports pin={pin} db={db} />}
+      {tab === 'today' && <Bookings today />}
+      {tab === 'bookings' && <Bookings />}
+      {tab === 'services' && <Services db={db} />}
+      {tab === 'sites' && <Sites db={db} />}
+      {tab === 'settings' && <SettingsTab db={db} />}
+      {tab === 'reports' && <Reports db={db} />}
     </div>
   )
 }
 
-function PinLogin({ onOk }: { onOk: (pin: string) => void }) {
+function PinLogin({ onOk }: { onOk: () => void }) {
   const [pin, setPin] = useState('')
   const [busy, setBusy] = useState(false)
   async function go() {
     setBusy(true)
     const ok = await adminLogin(pin)
     setBusy(false)
-    if (ok) onOk(pin)
+    if (ok) onOk()
     else alert('PIN incorrecto')
   }
   return (
@@ -75,23 +75,41 @@ function PinLogin({ onOk }: { onOk: (pin: string) => void }) {
   )
 }
 
+/**
+ * Campo de texto/número que solo guarda al salir del campo (blur), no en cada letra.
+ * Evita que varios guardados en paralelo mientras se escribe se pisen entre sí
+ * y termine grabado un valor incompleto (pasó con el PIN del panel: quedó vacío).
+ */
+function Field({ value, onCommit, label, type = 'text', placeholder }: { value: string | number; onCommit: (v: string) => void; label?: string; type?: string; placeholder?: string }) {
+  const [v, setV] = useState(String(value))
+  const committed = useRef(String(value))
+  useEffect(() => {
+    if (String(value) !== committed.current) { setV(String(value)); committed.current = String(value) }
+  }, [value])
+  const commit = () => { if (v !== committed.current) { committed.current = v; onCommit(v) } }
+  const input = type === 'textarea'
+    ? <textarea rows={2} value={v} placeholder={placeholder} onChange={(e) => setV(e.target.value)} onBlur={commit} />
+    : <input type={type} value={v} placeholder={placeholder} onChange={(e) => setV(e.target.value)} onBlur={commit} />
+  return label ? <label>{label}{input}</label> : input
+}
+
 const NEXT: Partial<Record<BookingStatus, [BookingStatus, string]>> = {
   pending: ['confirmed', 'Confirmar'],
   confirmed: ['in_progress', 'Iniciar'],
   in_progress: ['done', 'Finalizar'],
 }
 
-function useAdminBookings(pin: string) {
+function useAdminBookings() {
   const [all, setAll] = useState<Booking[]>([])
   const [loading, setLoading] = useState(true)
-  const refresh = () => { setLoading(true); adminBookings(pin).then((b) => { setAll(b); setLoading(false) }) }
-  useEffect(refresh, [pin])
+  const refresh = () => { setLoading(true); adminBookings().then((b) => { setAll(b); setLoading(false) }) }
+  useEffect(refresh, [])
   return { all, loading, refresh }
 }
 
-function Bookings({ pin, today }: { pin: string; today?: boolean }) {
+function Bookings({ today }: { today?: boolean }) {
   const db = useDB()
-  const { all, loading, refresh } = useAdminBookings(pin)
+  const { all, loading, refresh } = useAdminBookings()
   const [date, setDate] = useState(today ? toISO(new Date()) : '')
   const [siteId, setSiteId] = useState('')
   const list = all
@@ -114,7 +132,7 @@ function Bookings({ pin, today }: { pin: string; today?: boolean }) {
         <div className="chips">
           <button onClick={refresh}>Actualizar</button>
           {date && (
-            <button onClick={() => adminUpdate(pin, (d) => ({ ...d, closedDates: closed ? d.closedDates.filter((x) => x !== date) : [...d.closedDates, date] }))}>
+            <button onClick={() => adminUpdate((d) => ({ ...d, closedDates: closed ? d.closedDates.filter((x) => x !== date) : [...d.closedDates, date] }))}>
               {closed ? 'Reabrir este día' : 'Cerrar este día (lluvia / feriado)'}
             </button>
           )}
@@ -135,10 +153,10 @@ function Bookings({ pin, today }: { pin: string; today?: boolean }) {
             <p className="muted small">{site?.name}{b.address && ` · ${b.address}`}{extras && ` · Extras: ${extras}`}{b.notes && ` · ${b.notes}`}</p>
             <p><strong>{money(b.total)}</strong> · {PAY_LABEL[b.payMethod]} · {b.paid ? 'Pagado' : 'Sin pagar'}{b.rating ? ` · ${'★'.repeat(b.rating)}` : ''}</p>
             <div className="chips">
-              {next && <button className="primary" onClick={async () => { await setBookingStatus(pin, b.id, next[0]); refresh() }}>{next[1]}</button>}
-              <button onClick={async () => { await setBookingPaid(pin, b.id, !b.paid); refresh() }}>{b.paid ? 'Marcar sin pagar' : 'Marcar pagado'}</button>
+              {next && <button className="primary" onClick={async () => { await setBookingStatus(b.id, next[0]); refresh() }}>{next[1]}</button>}
+              <button onClick={async () => { await setBookingPaid(b.id, !b.paid); refresh() }}>{b.paid ? 'Marcar sin pagar' : 'Marcar pagado'}</button>
               <a className="btn" href={waLink(b.customerPhone, fillTemplate(db.settings.waTemplate, { nombre: b.customerName, fecha: prettyDate(b.date), hora: b.time, barrio: site?.name ?? '', servicio: service?.name ?? '' }))} target="_blank" rel="noreferrer">WhatsApp</a>
-              {b.status !== 'cancelled' && b.status !== 'done' && <button onClick={async () => { await setBookingStatus(pin, b.id, 'cancelled'); refresh() }}>Cancelar</button>}
+              {b.status !== 'cancelled' && b.status !== 'done' && <button onClick={async () => { await setBookingStatus(b.id, 'cancelled'); refresh() }}>Cancelar</button>}
             </div>
           </section>
         )
@@ -147,9 +165,9 @@ function Bookings({ pin, today }: { pin: string; today?: boolean }) {
   )
 }
 
-function Services({ db, pin }: { db: Catalog; pin: string }) {
+function Services({ db }: { db: Catalog }) {
   const cats = db.categories
-  const update = (fn: (d: Catalog) => Catalog) => adminUpdate(pin, fn)
+  const update = (fn: (d: Catalog) => Catalog) => adminUpdate(fn)
   return (
     <div className="stack">
       <section className="card">
@@ -163,13 +181,13 @@ function Services({ db, pin }: { db: Catalog; pin: string }) {
               {db.services.map((s) => (
                 <tr key={s.id}>
                   <td>
-                    <input value={s.name} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, name: e.target.value } : x) }))} />
-                    <input value={s.description} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, description: e.target.value } : x) }))} />
+                    <Field value={s.name} onCommit={(v) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, name: v } : x) }))} />
+                    <Field value={s.description} onCommit={(v) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, description: v } : x) }))} />
                   </td>
-                  <td><input className="num" type="number" value={s.minutes} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, minutes: +e.target.value } : x) }))} /></td>
+                  <td><Field type="number" value={s.minutes} onCommit={(v) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, minutes: +v } : x) }))} /></td>
                   {cats.map((c) => (
-                    <td key={c.id}><input className="num" type="number" value={db.prices[`${s.id}:${c.id}`] ?? 0}
-                      onChange={(e) => update((d) => ({ ...d, prices: { ...d.prices, [`${s.id}:${c.id}`]: +e.target.value } }))} /></td>
+                    <td key={c.id}><Field type="number" value={db.prices[`${s.id}:${c.id}`] ?? 0}
+                      onCommit={(v) => update((d) => ({ ...d, prices: { ...d.prices, [`${s.id}:${c.id}`]: +v } }))} /></td>
                   ))}
                   <td><input type="checkbox" checked={s.active} onChange={(e) => update((d) => ({ ...d, services: d.services.map((x) => x.id === s.id ? { ...x, active: e.target.checked } : x) }))} /></td>
                   <td><button onClick={() => confirm('¿Eliminar servicio?') && update((d) => ({ ...d, services: d.services.filter((x) => x.id !== s.id) }))}>✕</button></td>
@@ -185,7 +203,7 @@ function Services({ db, pin }: { db: Catalog; pin: string }) {
         <h2>Tipos de vehículo</h2>
         {cats.map((c) => (
           <div className="row" key={c.id}>
-            <input value={c.name} onChange={(e) => update((d) => ({ ...d, categories: d.categories.map((x) => x.id === c.id ? { ...x, name: e.target.value } : x) }))} />
+            <Field value={c.name} onCommit={(v) => update((d) => ({ ...d, categories: d.categories.map((x) => x.id === c.id ? { ...x, name: v } : x) }))} />
             <label className="inline"><input type="checkbox" checked={c.active} onChange={(e) => update((d) => ({ ...d, categories: d.categories.map((x) => x.id === c.id ? { ...x, active: e.target.checked } : x) }))} />Activo</label>
           </div>
         ))}
@@ -196,8 +214,8 @@ function Services({ db, pin }: { db: Catalog; pin: string }) {
         <h2>Extras</h2>
         {db.extras.map((x) => (
           <div className="row" key={x.id}>
-            <input value={x.name} onChange={(e) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, name: e.target.value } : y) }))} />
-            <input className="num" type="number" value={x.price} onChange={(e) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, price: +e.target.value } : y) }))} />
+            <Field value={x.name} onCommit={(v) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, name: v } : y) }))} />
+            <Field type="number" value={x.price} onCommit={(v) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, price: +v } : y) }))} />
             <label className="inline"><input type="checkbox" checked={x.active} onChange={(e) => update((d) => ({ ...d, extras: d.extras.map((y) => y.id === x.id ? { ...y, active: e.target.checked } : y) }))} />Activo</label>
             <button onClick={() => update((d) => ({ ...d, extras: d.extras.filter((y) => y.id !== x.id) }))}>✕</button>
           </div>
@@ -208,19 +226,19 @@ function Services({ db, pin }: { db: Catalog; pin: string }) {
   )
 }
 
-function Sites({ db, pin }: { db: Catalog; pin: string }) {
-  const set = (id: string, patch: Partial<Site>) => adminUpdate(pin, (d) => ({ ...d, sites: d.sites.map((s) => (s.id === id ? { ...s, ...patch } : s)) }))
+function Sites({ db }: { db: Catalog }) {
+  const set = (id: string, patch: Partial<Site>) => adminUpdate((d) => ({ ...d, sites: d.sites.map((s) => (s.id === id ? { ...s, ...patch } : s)) }))
   return (
     <div className="stack">
       {db.sites.map((s) => (
         <section className="card" key={s.id}>
           <div className="row">
-            <input value={s.name} onChange={(e) => set(s.id, { name: e.target.value })} />
+            <Field value={s.name} onCommit={(v) => set(s.id, { name: v })} />
             <label className="inline"><input type="checkbox" checked={s.active} onChange={(e) => set(s.id, { active: e.target.checked })} />Activo</label>
-            <button onClick={() => confirm('¿Eliminar barrio?') && adminUpdate(pin, (d) => ({ ...d, sites: d.sites.filter((x) => x.id !== s.id) }))}>✕</button>
+            <button onClick={() => confirm('¿Eliminar barrio?') && adminUpdate((d) => ({ ...d, sites: d.sites.filter((x) => x.id !== s.id) }))}>✕</button>
           </div>
           <div className="grid">
-            <label>Zona<input value={s.zone} onChange={(e) => set(s.id, { zone: e.target.value })} /></label>
+            <Field label="Zona" value={s.zone} onCommit={(v) => set(s.id, { zone: v })} />
             <label>Modalidad
               <select value={s.mode} onChange={(e) => set(s.id, { mode: e.target.value as Site['mode'] })}>
                 <option value="fixed">Lugar fijo provisto por el barrio</option>
@@ -229,8 +247,8 @@ function Sites({ db, pin }: { db: Catalog; pin: string }) {
             </label>
             <label>Desde<input type="time" value={s.start} onChange={(e) => set(s.id, { start: e.target.value })} /></label>
             <label>Hasta<input type="time" value={s.end} onChange={(e) => set(s.id, { end: e.target.value })} /></label>
-            <label>Minutos por turno<input type="number" value={s.slotMinutes} onChange={(e) => set(s.id, { slotMinutes: +e.target.value })} /></label>
-            <label>Autos simultáneos por turno<input type="number" value={s.perSlot} onChange={(e) => set(s.id, { perSlot: +e.target.value })} /></label>
+            <Field label="Minutos por turno" type="number" value={s.slotMinutes} onCommit={(v) => set(s.id, { slotMinutes: +v })} />
+            <Field label="Autos simultáneos por turno" type="number" value={s.perSlot} onCommit={(v) => set(s.id, { perSlot: +v })} />
           </div>
           <div className="grid">
             <label>Comisión para el barrio
@@ -241,15 +259,13 @@ function Sites({ db, pin }: { db: Catalog; pin: string }) {
               </select>
             </label>
             {s.commissionType !== 'none' && (
-              <label>{s.commissionType === 'percent' ? 'Porcentaje (%)' : 'Monto por lavado ($)'}
-                <input type="number" value={s.commissionValue} onChange={(e) => set(s.id, { commissionValue: +e.target.value })} />
-              </label>
+              <Field label={s.commissionType === 'percent' ? 'Porcentaje (%)' : 'Monto por lavado ($)'} type="number" value={s.commissionValue} onCommit={(v) => set(s.id, { commissionValue: +v })} />
             )}
-            <label>PIN de acceso del barrio (solo lectura)<input value={s.sitePin} onChange={(e) => set(s.id, { sitePin: e.target.value })} placeholder="Vacío = sin acceso" /></label>
+            <Field label="PIN de acceso del barrio (solo lectura)" value={s.sitePin} placeholder="Vacío = sin acceso" onCommit={(v) => set(s.id, { sitePin: v })} />
           </div>
-          <label>Aviso para los clientes de este barrio (se muestra al reservar)<input value={s.clientNotice} onChange={(e) => set(s.id, { clientNotice: e.target.value })} /></label>
-          <label>Aviso para la administración del barrio (se muestra en su panel)<input value={s.siteNotice} onChange={(e) => set(s.id, { siteNotice: e.target.value })} /></label>
-          <label>Indicaciones del lugar<input value={s.spotNote} onChange={(e) => set(s.id, { spotNote: e.target.value })} /></label>
+          <Field label="Aviso para los clientes de este barrio (se muestra al reservar)" value={s.clientNotice} onCommit={(v) => set(s.id, { clientNotice: v })} />
+          <Field label="Aviso para la administración del barrio (se muestra en su panel)" value={s.siteNotice} onCommit={(v) => set(s.id, { siteNotice: v })} />
+          <Field label="Indicaciones del lugar" value={s.spotNote} onCommit={(v) => set(s.id, { spotNote: v })} />
           <div className="chips">
             {DAY_NAMES.map((n, i) => (
               <button key={i} className={`chip ${s.days.includes(i) ? 'on' : ''}`}
@@ -258,16 +274,16 @@ function Sites({ db, pin }: { db: Catalog; pin: string }) {
           </div>
         </section>
       ))}
-      <button onClick={() => adminUpdate(pin, (d) => ({ ...d, sites: [...d.sites, { id: uid('site'), name: 'Nuevo barrio', zone: '', mode: 'fixed', spotNote: '', days: [], start: '09:00', end: '17:00', slotMinutes: 60, perSlot: 2, active: true, commissionType: 'none', commissionValue: 0, sitePin: '', clientNotice: '', siteNotice: '' }] }))}>+ Barrio o club</button>
+      <button onClick={() => adminUpdate((d) => ({ ...d, sites: [...d.sites, { id: uid('site'), name: 'Nuevo barrio', zone: '', mode: 'fixed', spotNote: '', days: [], start: '09:00', end: '17:00', slotMinutes: 60, perSlot: 2, active: true, commissionType: 'none', commissionValue: 0, sitePin: '', clientNotice: '', siteNotice: '' }] }))}>+ Barrio o club</button>
     </div>
   )
 }
 
-function SettingsTab({ db, pin }: { db: Catalog; pin: string }) {
+function SettingsTab({ db }: { db: Catalog }) {
   const s = db.settings
-  const set = (patch: Partial<Settings>) => adminUpdate(pin, (d) => ({ ...d, settings: { ...d.settings, ...patch } }))
+  const set = (patch: Partial<Settings>) => adminUpdate((d) => ({ ...d, settings: { ...d.settings, ...patch } }))
   const text = (k: keyof Settings, label: string, type = 'text') => (
-    <label>{label}<input type={type} value={String(s[k])} onChange={(e) => set({ [k]: type === 'number' ? +e.target.value : e.target.value } as Partial<Settings>)} /></label>
+    <Field label={label} type={type} value={s[k] as string | number} onCommit={(v) => set({ [k]: type === 'number' ? +v : v } as Partial<Settings>)} />
   )
   return (
     <div className="stack">
@@ -280,8 +296,12 @@ function SettingsTab({ db, pin }: { db: Catalog; pin: string }) {
           {text('whatsapp', 'WhatsApp (con código de país, ej. 5491112345678)')}
         </div>
         {text('promoText', 'Mensaje promocional')}
-        <label>Mensaje de WhatsApp al cliente. Variables: {'{nombre} {fecha} {hora} {barrio} {servicio}'}<textarea rows={2} value={s.waTemplate} onChange={(e) => set({ waTemplate: e.target.value })} /></label>
-        <label>Términos y condiciones<textarea rows={3} value={s.terms} onChange={(e) => set({ terms: e.target.value })} /></label>
+        <label>Mensaje de WhatsApp al cliente. Variables: {'{nombre} {fecha} {hora} {barrio} {servicio}'}
+          <Field type="textarea" value={s.waTemplate} onCommit={(v) => set({ waTemplate: v })} />
+        </label>
+        <label>Términos y condiciones
+          <Field type="textarea" value={s.terms} onCommit={(v) => set({ terms: v })} />
+        </label>
       </section>
       <section className="card">
         <h2>Reservas</h2>
@@ -309,14 +329,15 @@ function SettingsTab({ db, pin }: { db: Catalog; pin: string }) {
       <section className="card">
         <h2>Seguridad y datos</h2>
         {text('adminPin', 'PIN del panel')}
-        <button onClick={() => confirm('Esto borra todos los datos y vuelve a los valores iniciales. ¿Seguro?') && resetToSeed(pin)}>Restablecer datos de ejemplo</button>
+        <p className="muted small">Al guardar un PIN nuevo, esta sesión pasa a usarlo automáticamente para los próximos cambios.</p>
+        <button onClick={() => confirm('Esto borra todos los datos y vuelve a los valores iniciales. ¿Seguro?') && resetToSeed()}>Restablecer datos de ejemplo</button>
       </section>
     </div>
   )
 }
 
-function Reports({ pin, db }: { pin: string; db: Catalog }) {
-  const { all, loading, refresh } = useAdminBookings(pin)
+function Reports({ db }: { db: Catalog }) {
+  const { all, loading, refresh } = useAdminBookings()
   const [from, setFrom] = useState(() => toISO(new Date(new Date().getFullYear(), new Date().getMonth(), 1)))
   const [to, setTo] = useState(() => toISO(new Date()))
   const inRange = all.filter((b) => b.date >= from && b.date <= to && b.status !== 'cancelled')
