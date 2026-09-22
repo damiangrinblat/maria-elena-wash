@@ -18,7 +18,7 @@ jobs:
           set -e
           test -n "$SUPABASE_URL" || { echo "Falta el secret SUPABASE_URL"; exit 1; }
           code=$(curl -s -o /dev/null -w "%{http_code}" \
-            "$SUPABASE_URL/rest/v1/services?select=id&limit=1" \
+            "$SUPABASE_URL/rest/v1/public_slots?select=site_id&limit=1" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY")
           echo "HTTP $code"
