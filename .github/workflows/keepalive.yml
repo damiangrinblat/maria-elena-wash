@@ -1,25 +1,27 @@
 name: Mantener Supabase activo
 
-# El plan gratuito de Supabase pausa proyectos sin actividad. Esta tarea hace una consulta cada 3 días.
+# El plan gratuito de Supabase pausa proyectos sin actividad. Esta tarea escribe
+# en la base todos los días (una simple lectura no pareció contar como "actividad").
 on:
   schedule:
-    - cron: '17 9 */3 * *'
+    - cron: '17 9 * * *'
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Consulta a la base de datos
+      - name: Escribir en la base (heartbeat)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           set -e
           test -n "$SUPABASE_URL" || { echo "Falta el secret SUPABASE_URL"; exit 1; }
-          code=$(curl -s -o /dev/null -w "%{http_code}" \
-            "$SUPABASE_URL/rest/v1/public_slots?select=site_id&limit=1" \
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "$SUPABASE_URL/rest/v1/rpc/ping_heartbeat" \
             -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Content-Length: 0")
           echo "HTTP $code"
-          test "$code" = "200"
+          test "$code" = "200" || test "$code" = "204"
